@@ -1,0 +1,66 @@
+# orbctl create -a arm64 -u kube -c cloud-init.yaml ubuntu:noble k8s-m
+
+# -------- 用户配置 ----------
+users:
+  - name: kube
+    gecos: "Kubernetes user"
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    # ssh-authorized-keys:
+    #   # 替换你的公钥
+    #   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOd96g9gEDVjJKCiiGvJ76KY8RXzvlchdmBrQ3KtsGjO
+
+# root 用户可登录，密码禁用
+# disable_root: false
+# ssh_pwauth: true
+
+# -------- 国内镜像 ----------
+# 不同架构使用不用镜像地址
+# arm64：https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports
+# amd64: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+apt:
+  sources_list: |
+    Types: deb
+    URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports
+    Suites: noble noble-updates noble-backports
+    Components: main restricted universe multiverse
+    Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+  sources_list_security: |
+    Types: deb
+    URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports
+    Suites: noble-security
+    Components: main restricted universe multiverse
+    Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+package_update: true
+package_upgrade: true
+
+# -------- 设置时区 ----------
+timezone: Asia/Shanghai
+
+# -------- 安装基础软件 ----------
+packages:
+  - openssh-server
+
+# -------- 初始化命令 ----------
+runcmd:
+  # 更新系统
+  # - apt-get update -y || true
+  # - apt-get upgrade -y || true
+
+# -------- SSH 与安全 ----------
+# 自动生成 SSH host keys（通常云镜像已生成）
+# ssh_deletekeys: false
+# ssh_genkeytypes: ["ed25519"]
+
+# -------- 网络 ----------
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      dhcp6: false
+# -------- 7️⃣ 后期可扩展 ----------
+# - 挂载存储卷
+# - 安装 Kubernetes 依赖
+# - 配置互相 ssh 信任
