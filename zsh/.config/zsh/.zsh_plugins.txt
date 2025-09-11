@@ -1,0 +1,25 @@
+# 命令建议与高亮
+zsh-users/zsh-autosuggestions
+zsh-users/zsh-syntax-highlighting
+
+# 历史记录增强
+zsh-users/zsh-history-substring-search
+
+# 快速跳转目录
+ajeetdsouza/zoxide
+
+# Git 命令增强
+ohmyzsh/ohmyzsh path:plugins/git
+
+# 命令别名提醒
+MichaelAquilina/zsh-you-should-use
+
+# 快速复制路径/命令
+ohmyzsh/ohmyzsh path:plugins/copypath
+ohmyzsh/ohmyzsh path:plugins/copybuffer
+
+# 快速添加 sudo
+ohmyzsh/ohmyzsh path:plugins/sudo
+
+# 命令补全增强
+zsh-users/zsh-completions

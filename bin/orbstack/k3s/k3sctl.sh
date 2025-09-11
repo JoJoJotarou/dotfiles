@@ -273,5 +273,18 @@ if [ "$1" = "--version" ]; then
     exit 0
 fi
 
+# 重启集群
+if [ "$1" = "--restart" ]; then
+    echo "🔄 重启 K3s 集群..."
+    ssh "${USER}@${master}@orb" "sudo systemctl restart k3s"
+    for node in $node1 $node2; do
+        ssh "${USER}@${node}@orb" "sudo systemctl restart k3s-agent"
+    done
+    echo "✅ 重启命令已发送，等待节点就绪..."
+    check_master_ready
+    wait_nodes_ready
+    exit 0
+fi
+
 # 执行主安装流程
 main "$@"
