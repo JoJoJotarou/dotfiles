@@ -15,7 +15,7 @@ else
 fi
 
 # 加载 Antidote 插件管理器
-source "$ZDOTDIR/antidote/antidote.zsh"
+source "/Users/changjunjie/Developer/Personal/dotfiles/zsh/.config/zsh/antidote/antidote.zsh"
 antidote load "$ZDOTDIR/.zsh_plugins.txt"
 
 # 加载 Starship 提示符

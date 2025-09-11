@@ -2,7 +2,7 @@
 # This won't be added again if you remove it.
 if [[ -f ~/.orbstack/shell/init.zsh ]]; then
     source ~/.orbstack/shell/init.zsh 2>/dev/null || :
-if
+fi
 
 if [[ -f /opt/homebrew/bin/brew ]]; then
     export HOMEBREW_PIP_INDEX_URL=http://mirrors.aliyun.com/pypi/simple #ckbrew

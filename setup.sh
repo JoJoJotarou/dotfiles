@@ -39,11 +39,6 @@ check_stow() {
     fi
 }
 
-# 📁 创建备份目录
-create_bak_dir() {
-    mkdir -p "$BAK_TIMESTAMP_DIR"
-}
-
 # 🗂️ 备份单个文件（保留目录结构）
 backup_file() {
     local target="$1"
@@ -82,6 +77,11 @@ backup_module_files() {
         local target_path="$HOME/$rel_path"
 
         if [[ "$target_path" == "$HOME"* ]] && [ -e "$target_path" ] && [ ! -L "$target_path" ]; then
+            # 备份目录不存在则创建
+            if [[ ! -d "$BAK_TIMESTAMP_DIR" ]]; then
+                mkdir -p "$BAK_TIMESTAMP_DIR"
+            fi
+
             backup_file "$target_path"
         fi
     done
@@ -103,11 +103,34 @@ prepare_module_dirs() {
     done
 }
 
+update_antidote_path_in_zshrc() {
+    local zshrc_path="$DOTFILES_DIR/zsh/.config/zsh/.zshrc"
+    local antidote_path="$DOTFILES_DIR/zsh/.config/zsh/antidote/antidote.zsh"
+
+    if [ ! -f "$zshrc_path" ]; then
+        echo -e "${RED}未找到 .zshrc 文件，跳过 Antidote 路径替换${NC}"
+        return
+    fi
+
+    if [ ! -f "$antidote_path" ]; then
+        echo -e "${RED}未找到 Antidote 文件，跳过路径替换${NC}"
+        return
+    fi
+
+    # 替换 .zshrc 中的 Antidote 路径（只替换 source 行）
+    if [[ "$OSTYPE" == darwin* ]]; then
+        sed -i '' "s|^source .*antidote.zsh|source \"$antidote_path|" "$zshrc_path"
+    else
+        sed -i "s|^source .*antidote.zsh|source \"$antidote_path|" "$zshrc_path"
+    fi
+
+    echo -e "${GREEN}✅ 已更新 .zshrc 中的 Antidote 路径为:${NC}"
+    echo -e "${YELLOW}  $antidote_path${NC}"
+}
 
 # 🚀 安装 dotfiles
 install_dotfiles() {
     echo -e "${BLUE}开始安装 dotfiles...${NC}"
-    create_bak_dir
 
     for module in "${MODULES[@]}"; do
         backup_module_files "$module"
@@ -122,6 +145,9 @@ install_dotfiles() {
                 echo -e "${YELLOW}  [Dry-run] stow -v -t \"$HOME\" \"$module\"${NC}"
             else
                 stow -v -t "$HOME" "$module"
+            fi
+            if [ "$module" = "zsh" ]; then
+                update_antidote_path_in_zshrc
             fi
         fi
     done
