@@ -14,8 +14,11 @@ ohmyzsh/ohmyzsh path:plugins/git
 MichaelAquilina/zsh-you-should-use
 
 # 快速复制路径/命令
+ohmyzsh/ohmyzsh path:lib/clipboard.zsh
 ohmyzsh/ohmyzsh path:plugins/copypath
+# copybuffer会添加ctrl+o快捷键，将当前终端输入的命令复制到剪切板
 ohmyzsh/ohmyzsh path:plugins/copybuffer
+ohmyzsh/ohmyzsh path:plugins/copyfile
 
 # 快速添加 sudo
 ohmyzsh/ohmyzsh path:plugins/sudo
