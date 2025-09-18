@@ -26,13 +26,68 @@ _clone_and_config() {
     echo "=>succ" || echo "=>fail!!"
 }
 
+# 定义 Jo 用户相关变量
+JO_DOMAIN="jojojotarou.github.com"
+JO_USER_NAME="JoJoJotarou"
+JO_USER_EMAIL="58281079+JoJoJotarou@users.noreply.github.com"
+
+# 定义 et0 用户相关变量
+ET0_DOMAIN="enjoytech0.github.com"
+ET0_USER_NAME="EnjoyTech0"
+ET0_USER_EMAIL="104669762+EnjoyTech0@users.noreply.github.com"
+
 # 具体用户函数
-ghc.jo() {
+ghc_jo() {
     local repo_name=$(_extract_repo_name "$1")
-    _clone_and_config "$repo_name" "jojojotarou.github.com" "JoJoJotarou" "58281079+JoJoJotarou@users.noreply.github.com"
+    _clone_and_config "$repo_name" "$JO_DOMAIN" "$JO_USER_NAME" "$JO_USER_EMAIL"
 }
 
-ghc.et0() {
+ghc_et0() {
     local repo_name=$(_extract_repo_name "$1")
-    _clone_and_config "$repo_name" "enjoytech0.github.com" "EnjoyTech0" "104669762+EnjoyTech0@users.noreply.github.com"
+    _clone_and_config "$repo_name" "$ET0_DOMAIN" "$ET0_USER_NAME" "$ET0_USER_EMAIL"
+}
+
+# 通用检查函数，减少代码重复
+_check_git_settings() {
+    local domain="$1"
+    local user_name="$2"
+    local user_email="$3"
+
+    # 检查是否是git项目
+    if [[ $(git rev-parse --is-inside-work-tree 2>/dev/null) != "true" ]]; then
+        echo "❌ not a git project"
+        return 1
+    fi
+
+    # 检查当前仓库的remote url
+    local remote_url=$(git remote get-url origin)
+    if [[ $remote_url =~ $domain ]]; then
+        echo "✅ current remote url is $domain"
+    else
+        echo "❌ current remote url is not $domain"
+    fi
+
+    # 检查当前仓库的user.name
+    local name=$(git config --local user.name)
+    if [[ $name == "$user_name" ]]; then
+        echo "✅ current user.name is $user_name"
+    else
+        echo "❌ current user.name is not $user_name"
+    fi
+
+    # 检查当前仓库的user.email
+    local email=$(git config --local user.email)
+    if [[ $email == "$user_email" ]]; then
+        echo "✅ current user.email is $user_email"
+    else
+        echo "❌ current user.email is not $user_email"
+    fi
+}
+
+gh_check_for_jo() {
+    _check_git_settings "$JO_DOMAIN" "$JO_USER_NAME" "$JO_USER_EMAIL"
+}
+
+gh_check_for_et0() {
+    _check_git_settings "$ET0_DOMAIN" "$ET0_USER_NAME" "$ET0_USER_EMAIL"
 }
