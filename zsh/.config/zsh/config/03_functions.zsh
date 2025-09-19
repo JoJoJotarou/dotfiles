@@ -10,6 +10,12 @@ if [[ "$OSTYPE" == darwin* ]]; then
         export JAVA_HOME=$(/usr/libexec/java_home -v 17)
         echo "Switched to JDK 17"
     }
+
+    # 切换 JDK 21
+    jdk21() {
+        export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+        echo "Switched to JDK 21"
+    }
 fi
 
 # 创建目录并立即进入
