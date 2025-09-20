@@ -38,7 +38,7 @@ bindkey '^[[B' history-substring-search-down
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND=(bg=none,fg=magenta,bold)
 
 # zsh-autosuggestions 自动建议的颜色
-ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=20'
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=3'
 
 # 初始化补全
 autoload -U compinit && compinit
