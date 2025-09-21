@@ -55,16 +55,32 @@ _check_git_settings() {
 
     # 检查是否是git项目
     if [[ $(git rev-parse --is-inside-work-tree 2>/dev/null) != "true" ]]; then
-        echo "❌ not a git project"
-        return 1
+        echo "⚠️ not a git project"
+        # 询问是否初始化git项目
+        # 修复 read 命令在某些环境下不支持 -p 参数的问题，将提示信息单独输出
+        echo -n "❓ Do you want to initialize a new git repository? (y/n) "
+        read REPLY
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]] || [[ $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+            # 配置git 项目，添加 remote url、user.name、user.email
+            git init
+            git remote add origin "git@${domain}:${user_name}/$(basename $(pwd))"
+            git config --local user.name "$user_name"
+            git config --local user.email "$user_email"
+            echo "✅ git project initialized and configured"
+        else
+            echo "❌ git project initialization cancelled"
+            return 1
+        fi
     fi
 
     # 检查当前仓库的remote url
     local remote_url=$(git remote get-url origin)
     if [[ $remote_url =~ $domain ]]; then
-        echo "✅ current remote url is $domain"
+        echo "✅ current remote url is $remote_url"
     else
-        echo "❌ current remote url is not $domain"
+        git remote set-url origin "git@${domain}:${user_name}/$(basename $(pwd))"
+        echo "✅ remote url updated to git@${domain}:${user_name}/$(basename $(pwd))"
     fi
 
     # 检查当前仓库的user.name
@@ -72,7 +88,8 @@ _check_git_settings() {
     if [[ $name == "$user_name" ]]; then
         echo "✅ current user.name is $user_name"
     else
-        echo "❌ current user.name is not $user_name"
+        git config --local user.name "$user_name"
+        echo "✅ user.name updated to $user_name"
     fi
 
     # 检查当前仓库的user.email
@@ -80,7 +97,8 @@ _check_git_settings() {
     if [[ $email == "$user_email" ]]; then
         echo "✅ current user.email is $user_email"
     else
-        echo "❌ current user.email is not $user_email"
+        git config --local user.email "$user_email"
+        echo "✅ user.email updated to $user_email"
     fi
 }
 
