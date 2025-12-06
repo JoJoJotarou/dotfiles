@@ -42,3 +42,6 @@ ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=3'
 
 # 初始化补全
 autoload -U compinit && compinit
+
+# uv pip 国内源
+export UV_DEFAULT_INDEX="https://mirrors.aliyun.com/pypi/simple/"
