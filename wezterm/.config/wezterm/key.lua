@@ -13,6 +13,11 @@ M.keys = {
     { key = "-", mods = "CTRL", action = act.DecreaseFontSize }, -- 缩小字体
     { key = "0", mods = "CTRL", action = act.ResetFontSize },    -- 恢复默认字体大小
 
+    -- HOME → 行首 (Ctrl-A)
+    { key = "Home", mods = "NONE", action = act.SendString("\x01") },
+    -- END → 行尾 (Ctrl-E)
+    { key = "End", mods = "NONE", action = act.SendString("\x05") },
+
     -- 标签管理
     { key = "t", mods = "CMD", action = act.SpawnTab "CurrentPaneDomain" },
     { key = "w", mods = "CMD", action = act.CloseCurrentTab { confirm = true } },
