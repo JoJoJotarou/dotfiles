@@ -1,7 +1,8 @@
 # 添加自定义二进制路径到 PATH
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/bin:$PATH"
-export PATH="$HOME/Developer/Personal/dotfiles/bin/git:$PATH"
+# 本文件: zsh/.config/zsh/config/ → 上五级为 dotfiles 仓库根
+export PATH="${0:A:h:h:h:h:h}/bin/git:$PATH"
 
 # 添加 Homebrew (macOS)
 if [[ "$OSTYPE" == darwin* ]]; then
