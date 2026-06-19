@@ -122,7 +122,20 @@ list_managed_userids() {
 }
 
 select_managed_userid() {
-    local prompt="${1:-请选择要使用的 GitHub 账号：}"
+    if ! select_userid_with_options "${1:-请选择要使用的 GitHub 账号：}" "false"; then
+        log_error "没有找到任何账号，请先运行 ghm add"
+        exit 1
+    fi
+}
+
+# git 包装器：选已有账号，或 0 = 不注入 ghm（等同普通 git）
+select_userid_or_plain_git() {
+    select_userid_with_options "${1:-未匹配到账号目录，请选择: }" "true"
+}
+
+select_userid_with_options() {
+    local prompt="$1"
+    local allow_plain_git="${2:-false}"
     ensure_dirs
 
     local accounts=()
@@ -133,11 +146,13 @@ select_managed_userid() {
     done < <(list_managed_userids)
 
     if [[ ${#accounts[@]} -eq 0 ]]; then
-        log_error "没有找到任何账号，请先运行 ghm add"
-        exit 1
+        return 1
     fi
 
     printf '%b\n' "${GREEN}${prompt}${NC}" >&2
+    if [[ "$allow_plain_git" == "true" ]]; then
+        echo "  0) 系统默认 git（不使用 ghm SSH / 不重写 URL）" >&2
+    fi
     local i=1
     local account
     for account in "${accounts[@]}"; do
@@ -147,6 +162,10 @@ select_managed_userid() {
 
     local choice
     read -rp "输入序号: " choice
+    if [[ "$allow_plain_git" == "true" && "$choice" == "0" ]]; then
+        printf '%s\n' ""
+        return 0
+    fi
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#accounts[@]} )); then
         log_error "无效选择"
         exit 1
@@ -155,7 +174,7 @@ select_managed_userid() {
     printf '%s\n' "${accounts[$((choice-1))]}"
 }
 
-# 从当前目录检测 UserID
+# 从当前目录检测 UserID（~/Developer/github/<UserID>/...）
 detect_userid_from_pwd() {
     if [[ "$PWD" == "$GITHUB_BASE_DIR"/* ]]; then
         local relative="${PWD#$GITHUB_BASE_DIR/}"
@@ -168,6 +187,175 @@ detect_userid_from_pwd() {
         fi
     fi
     echo ""
+}
+
+is_github_remote_url() {
+    local arg="${1:-}"
+    [[ "$arg" =~ ^git@ ]] || [[ "$arg" =~ ^ssh://git@ ]] || [[ "$arg" =~ github\.com ]]
+}
+
+# 从远程 URL 解析 owner、repo（repo 不含 .git）
+github_owner_repo_from_url() {
+    local url="${1:-}"
+    local owner="" repo=""
+
+    if [[ "$url" =~ ^git@[^:]+:([^/]+)/(.+)$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]}"
+    elif [[ "$url" =~ ^ssh://git@[^/]+/([^/]+)/(.+)$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]}"
+    elif [[ "$url" =~ ^https?://([^/]*\.)?github\.com/([^/]+)/(.+)$ ]]; then
+        owner="${BASH_REMATCH[2]}"
+        repo="${BASH_REMATCH[3]}"
+    else
+        return 1
+    fi
+
+    repo="${repo%.git}"
+    repo="${repo%%/*}"
+    if [[ -z "$owner" || -z "$repo" ]]; then
+        return 1
+    fi
+    printf '%s\n%s\n' "$owner" "$repo"
+}
+
+# 从 git 参数里的远程 URL 解析 owner（用户或组织，如 chengzi-io）
+extract_github_owner_from_git_args() {
+    local arg owner
+    for arg in "$@"; do
+        if ! is_github_remote_url "$arg"; then
+            continue
+        fi
+        if owner=$(github_owner_repo_from_url "$arg" | head -n1); then
+            printf '%s\n' "$owner"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ghm 管理的 clone 目标：~/Developer/github/<UserID>/<OrgId>/<repo>（个人仓用 personal）
+ghm_clone_destination_for() {
+    local userid="$1"
+    local owner="$2"
+    local repo="$3"
+
+    if [[ "$(normalize_userid_for_match "$userid")" == "$(normalize_userid_for_match "$owner")" ]]; then
+        printf '%s\n' "$GITHUB_BASE_DIR/$userid/personal/$repo"
+    else
+        printf '%s\n' "$GITHUB_BASE_DIR/$userid/$owner/$repo"
+    fi
+}
+
+# 解析 git clone 参数：输出 clone 选项、远程 URL（供重写与落盘）
+parse_git_clone_args() {
+    local -a clone_opts=()
+    local remote_url=""
+    local dest_path=""
+    local arg
+
+    if [[ "${1:-}" != "clone" ]]; then
+        return 1
+    fi
+    shift
+
+    for arg in "$@"; do
+        if [[ -z "$remote_url" ]] && is_github_remote_url "$arg"; then
+            remote_url="$arg"
+            continue
+        fi
+
+        if [[ -z "$remote_url" ]]; then
+            clone_opts+=("$arg")
+            continue
+        fi
+
+        if [[ -z "$dest_path" ]]; then
+            dest_path="$arg"
+            continue
+        fi
+
+        return 1
+    done
+
+    if [[ -z "$remote_url" ]]; then
+        return 1
+    fi
+
+    if (( ${#clone_opts[@]} > 0 )); then
+        printf '%s\0' "${clone_opts[@]}"
+    fi
+    printf '%s\0' "$remote_url"
+    printf '%s\0' "$dest_path"
+}
+
+# 根据 GitHub owner 匹配本地目录 ~/Developer/github/<UserID>/<owner>/ 或 personal（owner=账号名）
+find_userid_for_github_owner() {
+    local owner="${1:-}"
+    [[ -n "$owner" ]] || return 1
+
+    local owner_lc
+    owner_lc=$(normalize_userid_for_match "$owner")
+    local userid existing_userid
+
+    while IFS= read -r userid; do
+        [[ -n "$userid" ]] || continue
+        if [[ -d "$GITHUB_BASE_DIR/$userid/$owner" ]]; then
+            printf '%s\n' "$userid"
+            return 0
+        fi
+        if [[ "$(normalize_userid_for_match "$userid")" == "$owner_lc" ]]; then
+            if [[ -d "$GITHUB_BASE_DIR/$userid/personal" ]]; then
+                printf '%s\n' "$userid"
+                return 0
+            fi
+        fi
+    done < <(list_managed_userids)
+
+    return 1
+}
+
+# 仅自动：当前目录 或存在 ~/Developer/github/<账号>/<owner>/
+resolve_git_userid_auto() {
+    local userid owner
+
+    userid=$(detect_userid_from_pwd)
+    if [[ -n "$userid" ]]; then
+        printf '%s\n' "$userid"
+        return 0
+    fi
+
+    if owner=$(extract_github_owner_from_git_args "$@"); then
+        if userid=$(find_userid_for_github_owner "$owner"); then
+            log_info "ghm: 根据仓库 owner [$owner] 匹配到账号 [$userid]" >&2
+            printf '%s\n' "$userid"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# 将 git@github.com: 重写为 ghm 的 Host 别名（走 ~/.ssh/config 的 443 + IdentityFile）
+rewrite_github_ssh_urls_in_args() {
+    local userid="$1"
+    shift
+    local host_alias="${userid}.github.com"
+    local arg rewritten
+    local -a out=()
+
+    for arg in "$@"; do
+        rewritten="$arg"
+        if [[ "$arg" =~ ^git@github\.com: ]]; then
+            rewritten="git@${host_alias}:${arg#git@github.com:}"
+        elif [[ "$arg" =~ ^ssh://git@github\.com/ ]]; then
+            rewritten="ssh://git@${host_alias}/${arg#ssh://git@github.com/}"
+        fi
+        out+=("$rewritten")
+    done
+
+    printf '%s\0' "${out[@]}"
 }
 
 # 检查 SSH config 是否已包含某个 Host
@@ -213,6 +401,14 @@ gitconfig_has_include_pattern() {
     grep -Fqi "$pattern" "$gitconfig_file"
 }
 
+ssh_config_has_managed_block_for_userid() {
+    local userid="$1"
+    local config_file="$SSH_DIR/config"
+
+    [[ -f "$config_file" ]] || return 1
+    grep -Fqi "$GHM_SSH_CONFIG_MARKER - $userid" "$config_file"
+}
+
 gitconfig_has_managed_block_for_userid() {
     local userid="$1"
     local gitconfig_file="$HOME/.gitconfig"
@@ -254,6 +450,39 @@ gitconfig_get_user_field() {
     ' "$gitconfig_file"
 }
 
+gitconfig_get_user_field_by_include_pattern() {
+    local include_pattern="$1"
+    local field="$2"
+    local gitconfig_file="$HOME/.gitconfig"
+
+    [[ -f "$gitconfig_file" ]] || return 1
+
+    awk -v include_pattern="$include_pattern" -v field="$field" '
+        BEGIN {
+            target_include = "[includeif \"" tolower(include_pattern) "\"]"
+            target_field = tolower(field)
+            in_block = 0
+        }
+        tolower($0) == target_include {
+            in_block = 1
+            next
+        }
+        in_block && /^\[/ {
+            exit
+        }
+        in_block {
+            line = $0
+            lower = tolower(line)
+            pattern = "^[[:space:]]*" target_field "[[:space:]]*="
+            if (lower ~ pattern) {
+                sub(/^[[:space:]]*[^=]+=[[:space:]]*/, "", line)
+                print line
+                exit
+            }
+        }
+    ' "$gitconfig_file"
+}
+
 gitconfig_block_matches_userid() {
     local userid="$1"
     local gitconfig_file="$HOME/.gitconfig"
@@ -264,6 +493,98 @@ gitconfig_block_matches_userid() {
 
     grep -Fq "# ghm-managed for $userid" "$gitconfig_file" &&
     grep -Fq "[includeIf \"$include_pattern\"]" "$gitconfig_file"
+}
+
+gitconfig_remove_include_blocks_by_pattern() {
+    local include_pattern="$1"
+    local gitconfig_file="$HOME/.gitconfig"
+
+    [[ -f "$gitconfig_file" ]] || return 0
+
+    local tmpfile
+    tmpfile=$(mktemp "${TMPDIR:-/tmp}/ghm-gitconfig-include.XXXXXX")
+
+    awk -v include_pattern="$include_pattern" '
+        BEGIN {
+            skip = 0
+        }
+        {
+            line_lower = tolower($0)
+            target = "[includeif \"" tolower(include_pattern) "\"]"
+
+            if (!skip && line_lower == target) {
+                skip = 1
+                next
+            }
+
+            if (skip) {
+                if ($0 ~ /^[[:space:]]*$/) {
+                    next
+                }
+                if ($0 ~ /^[[:space:]]+/) {
+                    next
+                }
+                skip = 0
+            }
+
+            print
+        }
+    ' "$gitconfig_file" > "$tmpfile"
+
+    write_file_preserve_symlink "$gitconfig_file" "$tmpfile"
+    rm -f "$tmpfile"
+}
+
+ssh_config_remove_host_blocks_by_host() {
+    local host="$1"
+    local config_file="$SSH_DIR/config"
+
+    [[ -f "$config_file" ]] || return 0
+
+    local tmpfile
+    tmpfile=$(mktemp "${TMPDIR:-/tmp}/ghm-ssh-host.XXXXXX")
+
+    awk -v host="$host" '
+        BEGIN {
+            skip = 0
+            target = tolower(host)
+        }
+        {
+            first = tolower($1)
+
+            if (!skip && first == "host") {
+                matched = 0
+                for (i = 2; i <= NF; i++) {
+                    if (tolower($i) == target) {
+                        matched = 1
+                        break
+                    }
+                }
+                if (matched) {
+                    skip = 1
+                    next
+                }
+            }
+
+            if (skip) {
+                if ($0 ~ /^[[:space:]]*$/) {
+                    next
+                }
+                if (first == "host") {
+                    skip = 0
+                } else if ($0 ~ /^[[:space:]]+/) {
+                    next
+                } else {
+                    skip = 0
+                }
+            }
+
+            print
+        }
+    ' "$config_file" > "$tmpfile"
+
+    write_file_preserve_symlink "$config_file" "$tmpfile"
+    rm -f "$tmpfile"
 }
 
 replace_in_file() {
@@ -469,7 +790,7 @@ show_help() {
   ghm add <UserID>          添加新 GitHub 账号（生成密钥 + 配置 SSH，保留输入大小写，查找不区分大小写）
   ghm delete <UserID>       删除账号相关的密钥和 SSH/Git 配置（账号目录仅提示，不自动删除）
   ghm list                  列出已管理的所有账号
-  ghm git <git命令...>      git 包装器（自动根据目录选择 SSH 密钥，其余参数原样透传给 git）
+  ghm git <git命令...>      git 包装器（按目录或 URL owner 匹配账号，否则选择；git@github.com 自动重写）
   ghm help                  显示本帮助
 
 环境变量:
@@ -484,8 +805,8 @@ show_help() {
     └── bob/                      # Bob 这个 GitHub 账号
         └── personal/
 
-推荐克隆方式（使用别名）:
-  git clone git@alice.github.com:alice/my-repo.git
+推荐克隆（可直接 git@github.com，按 owner 匹配 ~/Developer/github/<账号>/<owner>/）:
+  ghm git clone git@github.com:chengzi-io/skills.git
 
 更多信息请查看脚本顶部注释。
 EOF
@@ -540,6 +861,12 @@ add_account() {
     # 2. 配置 ~/.ssh/config
     backup_ssh_config
 
+    if ssh_config_has_host "$host_alias" || ssh_config_has_managed_block_for_userid "$userid"; then
+        backup_ssh_config
+        remove_ssh_config_block_for_userid "$userid"
+        ssh_config_remove_host_blocks_by_host "$host_alias"
+    fi
+
     if ssh_config_has_host "$host_alias"; then
         log_warn "SSH config 中已存在 Host ${host_alias}，跳过写入"
     else
@@ -572,10 +899,17 @@ EOF
     local existing_git_name=""
     local existing_git_email=""
     local has_existing_gitconfig=0
+    local has_managed_gitconfig=0
     if gitconfig_has_managed_block_for_userid "$userid" || gitconfig_has_include_pattern "$include_pattern"; then
         has_existing_gitconfig=1
-        existing_git_name=$(gitconfig_get_user_field "$userid" "name")
-        existing_git_email=$(gitconfig_get_user_field "$userid" "email")
+        if gitconfig_has_managed_block_for_userid "$userid"; then
+            has_managed_gitconfig=1
+            existing_git_name=$(gitconfig_get_user_field "$userid" "name" || true)
+            existing_git_email=$(gitconfig_get_user_field "$userid" "email" || true)
+        else
+            existing_git_name=$(gitconfig_get_user_field_by_include_pattern "$include_pattern" "name" || true)
+            existing_git_email=$(gitconfig_get_user_field_by_include_pattern "$include_pattern" "email" || true)
+        fi
     fi
 
     local setup_git_prompt="是否为该账号配置 Git 提交作者信息（user.name / user.email）? [Y/n] "
@@ -612,11 +946,12 @@ EOF
                     block_matches_userid=1
                 fi
 
-                if [[ "$git_name" == "$existing_git_name" && "$git_email" == "$existing_git_email" && $block_matches_userid -eq 1 ]]; then
+                if [[ "$git_name" == "$existing_git_name" && "$git_email" == "$existing_git_email" && $block_matches_userid -eq 1 && $has_managed_gitconfig -eq 1 ]]; then
                     log_info "Git 提交作者信息保持不变"
                 else
                     backup_file "$gitconfig_file"
                     remove_gitconfig_block_for_userid "$userid"
+                    gitconfig_remove_include_blocks_by_pattern "$include_pattern"
                     cat >> "$gitconfig_file" << EOF
 
 # ghm-managed for $userid
@@ -628,6 +963,10 @@ EOF
                     log_ok "已更新 ~/.gitconfig 中的账号配置"
                 fi
             else
+                if gitconfig_has_include_pattern "$include_pattern"; then
+                    backup_file "$gitconfig_file"
+                    gitconfig_remove_include_blocks_by_pattern "$include_pattern"
+                fi
                 cat >> "$gitconfig_file" << EOF
 
 # ghm-managed for $userid
@@ -709,9 +1048,10 @@ delete_account() {
         log_warn "未找到密钥文件，跳过"
     fi
 
-    if [[ -f "$SSH_DIR/config" ]] && { ssh_config_has_host "$host_alias" || grep -Fqi "$GHM_SSH_CONFIG_MARKER - $userid" "$SSH_DIR/config"; }; then
+    if [[ -f "$SSH_DIR/config" ]] && { ssh_config_has_host "$host_alias" || ssh_config_has_managed_block_for_userid "$userid"; }; then
         backup_ssh_config
         remove_ssh_config_block_for_userid "$userid"
+        ssh_config_remove_host_blocks_by_host "$host_alias"
         log_ok "已清理 ~/.ssh/config 中的账号配置"
     else
         log_warn "~/.ssh/config 中未找到该账号配置，跳过"
@@ -720,6 +1060,7 @@ delete_account() {
     if [[ -f "$gitconfig_file" ]] && { gitconfig_has_include_pattern "$include_pattern" || grep -Fqi "# ghm-managed for $userid" "$gitconfig_file"; }; then
         backup_file "$gitconfig_file"
         remove_gitconfig_block_for_userid "$userid"
+        gitconfig_remove_include_blocks_by_pattern "$include_pattern"
         log_ok "已清理 ~/.gitconfig 中的账号配置"
     else
         log_warn "~/.gitconfig 中未找到该账号配置，跳过"
@@ -767,19 +1108,91 @@ list_accounts() {
 
 # git 包装器（核心功能）
 git_wrapper() {
-    local userid
-    userid=$(detect_userid_from_pwd)
-
-    if [[ -n "$userid" ]]; then
-        local keyfile
-        if keyfile=$(find_keyfile_by_userid "$userid"); then
-            export GIT_SSH_COMMAND="ssh -i '$keyfile' -o IdentitiesOnly=yes"
-            log_info "ghm: 当前目录属于账号 [$userid]，已自动使用对应 SSH 密钥" >&2
+    local userid=""
+    local picked_manually=0
+    if ! userid=$(resolve_git_userid_auto "$@" 2>/dev/null); then
+        if userid=$(select_userid_or_plain_git "未在账号目录且未匹配到 owner 子目录，请选择: "); then
+            if [[ -z "$userid" ]]; then
+                exec git "$@"
+            fi
+            picked_manually=1
+        else
+            exec git "$@"
         fi
     fi
 
-    # 执行真正的 git
-    exec git "$@"
+    local -a git_args=("$@")
+    if [[ -n "$userid" ]]; then
+        local keyfile host_alias
+        if keyfile=$(find_keyfile_by_userid "$userid"); then
+            host_alias="${userid}.github.com"
+            export GIT_SSH_COMMAND="ssh -o Hostname=ssh.github.com -o Port=443 -i ${keyfile} -o IdentitiesOnly=yes"
+        fi
+
+        if [[ "${git_args[0]:-}" == "clone" ]]; then
+            local -a clone_parts=()
+            local -a clone_opts=()
+            local remote_url="" dest_arg="" owner="" repo="" dest="" rewritten_url
+            while IFS= read -r -d '' item; do
+                clone_parts+=("$item")
+            done < <(parse_git_clone_args "${git_args[@]}" || true)
+
+            if (( ${#clone_parts[@]} > 0 )); then
+                local last_index=$((${#clone_parts[@]} - 1))
+                local remote_index=$((${#clone_parts[@]} - 2))
+                remote_url="${clone_parts[$remote_index]}"
+                dest_arg="${clone_parts[$last_index]}"
+                if (( remote_index > 0 )); then
+                    clone_opts=("${clone_parts[@]:0:$remote_index}")
+                fi
+            fi
+
+            if [[ -n "$remote_url" ]]; then
+                if [[ -n "$dest_arg" ]]; then
+                    log_error "暂不支持显式指定 clone 目标目录，请直接使用 ghm 约定目录"
+                    exit 1
+                fi
+                owner=$(github_owner_repo_from_url "$remote_url" | sed -n '1p')
+                repo=$(github_owner_repo_from_url "$remote_url" | sed -n '2p')
+                dest=$(ghm_clone_destination_for "$userid" "$owner" "$repo")
+                rewritten_url="$remote_url"
+                if [[ "$remote_url" =~ ^git@github\.com: ]]; then
+                    rewritten_url="git@${host_alias}:${remote_url#git@github.com:}"
+                elif [[ "$remote_url" =~ ^ssh://git@github\.com/ ]]; then
+                    rewritten_url="ssh://git@${host_alias}/${remote_url#ssh://git@github.com/}"
+                fi
+
+                mkdir -p "$(dirname "$dest")"
+                if [[ -e "$dest" ]]; then
+                    log_error "目标已存在: $dest"
+                    exit 1
+                fi
+
+                if [[ $picked_manually -eq 1 ]]; then
+                    log_info "ghm: 使用账号 [$userid] clone → $dest" >&2
+                elif [[ -n "$(detect_userid_from_pwd)" ]]; then
+                    log_info "ghm: 当前目录属于账号 [$userid]，clone → $dest" >&2
+                else
+                    log_info "ghm: 根据 owner [$owner] 使用账号 [$userid]，clone → $dest" >&2
+                fi
+
+                if (( ${#clone_opts[@]} > 0 )); then
+                    exec git clone "${clone_opts[@]}" "$rewritten_url" "$dest"
+                fi
+                exec git clone "$rewritten_url" "$dest"
+            fi
+        fi
+
+        if [[ ${#git_args[@]} -gt 0 ]]; then
+            local -a rewritten=()
+            while IFS= read -r -d '' item; do
+                rewritten+=("$item")
+            done < <(rewrite_github_ssh_urls_in_args "$userid" "${git_args[@]}")
+            git_args=("${rewritten[@]}")
+        fi
+    fi
+
+    exec git "${git_args[@]}"
 }
 
 # ==================== 主入口 ====================
