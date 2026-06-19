@@ -12,10 +12,10 @@ NC='\033[0m' # 无颜色
 # 📦 模块列表（根据你的 dotfiles 项目结构）
 MODULES=(
     "git"
+    "ghostty"
     "gradle"
     "maven"
     "ssh"
-    "wezterm"
     "zsh"
 )
 
