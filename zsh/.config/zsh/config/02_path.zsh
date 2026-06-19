@@ -1,6 +1,7 @@
 # 添加自定义二进制路径到 PATH
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/bin:$PATH"
+export PATH="$HOME/Developer/Personal/dotfiles/bin/git:$PATH"
 
 # 添加 Homebrew (macOS)
 if [[ "$OSTYPE" == darwin* ]]; then
