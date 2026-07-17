@@ -11,8 +11,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Starship/p10k 等工具需要 Nerd Font 显示图标
+# 主字体：英数/符号（JetBrains Mono 不含 CJK，中文会走下面的 fallback）
 font-family = "JetBrainsMono Nerd Font"
-# 回退字体（当前字体缺失字形时自动 fallback，如 emoji）
+# 中文回退：Maple Mono NF CN 为等宽 Nerd Font，覆盖简繁中文
+# 可重复写 font-family，按顺序 fallback（缺字形时依次尝试）
+font-family = "Maple Mono NF CN"
+# emoji 回退
 font-family = "Apple Color Emoji"
 
 font-size = 14
