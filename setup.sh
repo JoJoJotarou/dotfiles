@@ -103,34 +103,74 @@ prepare_module_dirs() {
     done
 }
 
-update_antidote_path_in_zshrc() {
-    local zshrc_path="$DOTFILES_DIR/zsh/.config/zsh/.zshrc"
-    local antidote_path="$DOTFILES_DIR/zsh/.config/zsh/antidote/antidote.zsh"
+# 🧷 ~/.zshenv 引导文件
+# ZDOTDIR 必须在 zsh 读取其他启动文件之前设置好，所以 ~/.zshenv 是 ~ 下的真实文件
+# （不是软链，也不由 stow 管理），内容来自仓库模板 bootstrap.zshenv。
+# 做成短的真实文件的好处：第三方安装器往 ~/.zshenv 追加时只脏这几行，一眼可见。
+ensure_zshenv_bootstrap() {
+    local src="$DOTFILES_DIR/zsh/.config/zsh/bootstrap.zshenv"
+    local dst="$HOME/.zshenv"
 
-    if [ ! -f "$zshrc_path" ]; then
-        echo -e "${RED}未找到 .zshrc 文件，跳过 Antidote 路径替换${NC}"
-        return
+    if [ ! -f "$src" ]; then
+        echo -e "${RED}缺少引导模板: $src${NC}"
+        return 1
     fi
 
-    if [ ! -f "$antidote_path" ]; then
-        echo -e "${RED}未找到 Antidote 文件，跳过路径替换${NC}"
-        return
+    if [ -L "$dst" ]; then
+        echo -e "${YELLOW}~/.zshenv 是软链（旧布局），替换为真实文件${NC}"
+        if $DRY_RUN; then
+            echo -e "${YELLOW}  [Dry-run] rm $dst${NC}"
+        else
+            rm -f "$dst"
+        fi
     fi
 
-    # 替换 .zshrc 中的 Antidote 路径（只替换 source 行）
-    if [[ "$OSTYPE" == darwin* ]]; then
-        sed -i '' "s|^source .*antidote.zsh|source \"$antidote_path|" "$zshrc_path"
-    else
-        sed -i "s|^source .*antidote.zsh|source \"$antidote_path|" "$zshrc_path"
+    if [ ! -e "$dst" ]; then
+        if $DRY_RUN; then
+            echo -e "${YELLOW}  [Dry-run] cp $src $dst${NC}"
+        else
+            cp "$src" "$dst"
+            echo -e "${GREEN}已生成 ~/.zshenv 引导文件${NC}"
+        fi
+    elif ! cmp -s "$src" "$dst"; then
+        echo -e "${YELLOW}~/.zshenv 与模板不一致（可能被安装器追加过），保留现状：${NC}"
+        diff "$src" "$dst" | sed 's/^/    /'
     fi
 
-    echo -e "${GREEN}✅ 已更新 .zshrc 中的 Antidote 路径为:${NC}"
-    echo -e "${YELLOW}  $antidote_path${NC}"
+    if [ -f "$HOME/.config/zsh/secrets.zsh" ] && ! $DRY_RUN; then
+        chmod 600 "$HOME/.config/zsh/secrets.zsh"
+    fi
+}
+
+# 🍎 macOS 登录项：复制（不软链，launchd 对软链的 plist 不可靠）到 ~/Library/LaunchAgents 并加载
+install_launch_agents() {
+    [[ "$OSTYPE" == darwin* ]] || return 0
+    local f dst
+    for f in "$DOTFILES_DIR"/macos/LaunchAgents/*.plist; do
+        [ -f "$f" ] || continue
+        dst="$HOME/Library/LaunchAgents/$(basename "$f")"
+        if $DRY_RUN; then
+            echo -e "${YELLOW}  [Dry-run] cp $f $dst && launchctl bootstrap${NC}"
+            continue
+        fi
+        cmp -s "$f" "$dst" && continue
+        cp "$f" "$dst"
+        launchctl bootout "gui/$(id -u)/$(basename "$f" .plist)" 2>/dev/null || true
+        launchctl bootstrap "gui/$(id -u)" "$dst"
+        echo -e "${GREEN}已加载登录项: $(basename "$f")${NC}"
+    done
 }
 
 # 🚀 安装 dotfiles
 install_dotfiles() {
     echo -e "${BLUE}开始安装 dotfiles...${NC}"
+
+    ensure_zshenv_bootstrap
+
+    # 启用仓库自带的 git 提交护栏（.githooks/pre-commit）
+    git -C "$DOTFILES_DIR" config core.hooksPath .githooks
+
+    install_launch_agents
 
     for module in "${MODULES[@]}"; do
         backup_module_files "$module"
@@ -145,9 +185,6 @@ install_dotfiles() {
                 echo -e "${YELLOW}  [Dry-run] stow -v -t \"$HOME\" \"$module\"${NC}"
             else
                 stow -v -t "$HOME" "$module"
-            fi
-            if [ "$module" = "zsh" ]; then
-                update_antidote_path_in_zshrc
             fi
         fi
     done

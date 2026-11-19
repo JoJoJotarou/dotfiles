@@ -1,1 +1,3 @@
-.config/zsh/antidote/*
+\.DS_Store
+\.bak
+\.config/zsh/bootstrap\.zshenv

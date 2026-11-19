@@ -1,3 +1,10 @@
-.Ds_store
+.DS_Store
 
 .bak/*
+.ace-tool/
+
+# 本机密钥，不入库（由 ~/.config/zsh/.zshenv source）
+zsh/.config/zsh/secrets.zsh
+
+# 本地文档，暂不入库
+docs/
