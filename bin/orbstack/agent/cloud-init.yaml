@@ -1,0 +1,279 @@
+#cloud-config
+# 隔离 agent 机：内置 sing-box（TUN 透明代理 + 本地 mixed），自带海外出口。
+# 宿主机只在“创建时”注入一次节点配置，之后 VM 与宿主机代理状态完全解耦——宿主机随便换网络/开关代理/换机器，
+# VM 出口与账号环境保持固定。Claude Code + Codex 常驻；避免账号因地区/IP 被封。背景见 docs/vpn-smart-routing-install.zh-CN.md。
+#
+# 结构（代理在 VM 内）：
+#   VM 内 sing-box：TUN(auto_route + strict_route) 接管一切出站，并监听 127.0.0.1:7890(mixed) 供调试。
+#     出站就是转换器生成的那个节点，形态随订阅而定（reality+tcp / ws+tls / hysteria2 ...），本文件不假设。
+#   route 里 sniff + hijack-dns 劫持所有 53 端口流量；应用 DNS 走远端 DoH(detour=proxy)。
+#   故意不写 /etc/profile.d 代理变量：TUN 已覆盖所有进程，环境变量只管登录 shell，留着反而像有兼职兜底。
+#
+# 用法（在宿主机执行，注意 -c 的相对路径，需在 agent 目录下）：
+#   1) 生成节点配置(敏感，勿入库)。转换器走 urllib、遵守 http_proxy/https_proxy；
+#      订阅站直连常被 429/断连，先 export 代理再跑：
+#        export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
+#        python3 bin/orbstack/agent/node2singbox.py --sub "<订阅URL>" --match "洛杉矶01" \
+#          --out ~/.config/orbstack-agent/config.json        # 或 --index N / --link "vless://..."
+#   2) cd bin/orbstack/agent && \
+#        orbctl create --isolated --isolate-network \
+#          --mount "$HOME/.config/orbstack-agent:/opt/agentcfg" \
+#          --mount "$HOME/Developer/github:/home/dev/github" \
+#          -u dev -c cloud-init.yaml ubuntu:noble agent
+#      · --isolated：不给宿主机文件，也到不了宿主机网络；保留互联网和 orb/ssh 接入。
+#      · --isolate-network：再挡掉其他 OrbStack 机器和宿主机 IP。
+#      · --mount：把宿主机节点配置注入一次，写进 VM 的 /etc/sing-box/config.json，之后与宿主机解耦。
+#        可重复；挂载是机器级设置，不在 cloud-init 里，删机重建必须重新给。
+#        已建好的机器改挂载：orb config set machine.agent.mounts 'A:/a,B:/b'（逗号分隔）后 orb restart agent。
+#   3) orb run -m agent -u dev cloud-init status --long   # 必须不是 error 再往下
+#      orbctl ssh agent   # 然后 claude / codex 登录(无浏览器走 URL+code)
+#
+# 说明：不在 cloud-init 里预写 /etc/sing-box/config.json——该路径是 sing-box deb 的 dpkg conffile，
+#   预写会让 apt 安装 sing-box 时弹 conffile 交互提示而非交互 EOF 报错。改为装完包后用 cp 覆盖。
+#   换 VM 节点：进 VM 改 /etc/sing-box/config.json 后 sudo systemctl restart agent-proxy。
+
+# ---------- 用户 ----------
+users:
+  - name: dev
+    gecos: "Agent dev user"
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [adm, sudo, users]
+    lock_passwd: true
+    # ssh-authorized-keys:
+    #   - ssh-ed25519 AAAA...   # 可选：替换为你的公钥
+
+# ---------- 地区/语言一致性(弱信号，主要仍看出口 IP) ----------
+timezone: America/Los_Angeles     # 与美国(洛杉矶)出口对齐；出口非 LA 可自行调整(见 docs 12.4)
+locale: en_US.UTF-8
+
+# ---------- apt：用镜像默认源(全球)，不引入国内源 ----------
+# package_update/package_upgrade 是顶层 key，不是 apt: 的成员。写进 apt: 会被 cloud-init schema
+# 判非法（Additional properties are not allowed）并静默失效，整机的 apt upgrade 根本不会跑。
+package_update: true
+package_upgrade: true
+
+# ---------- 基础依赖 ----------
+# iptables/nftables：sing-box TUN auto_route 需要；iproute2:ss/ip 探测；locales/language-pack:en_US.UTF-8
+packages:
+  - openssh-server
+  - curl
+  - ca-certificates
+  - git
+  - jq
+  - unzip
+  - gnupg
+  - build-essential
+  - locales
+  - language-pack-en
+  - iproute2
+  - iptables
+  - nftables
+
+# ---------- 文件 ----------
+write_files:
+  # 自建 systemd 单元：deb 自带的 sing-box.service 以 sing-box 用户 + -D/-C 目录约定跑，
+  # 这里换成 root + 单个 -c 文件，省掉 StateDirectory 和权限排查，TUN 也稳。
+  - path: /etc/systemd/system/agent-proxy.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=sing-box agent proxy (TUN + mixed 127.0.0.1:7890)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+      Restart=on-failure
+      RestartSec=3
+      LimitNOFILE=1048576
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # 交互式登录时打印状态：orbctl ssh agent / orb -m agent 都会走到。
+  # 非交互一律静默，免得污染 orb run ... -c、管道和重定向的输出。
+  # 整体包在子 shell 里，不往用户的交互 shell 里留变量。
+  - path: /etc/profile.d/zz-agent-status.sh
+    permissions: '0644'
+    content: |
+      # shellcheck shell=sh
+      case $- in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+      [ -t 1 ] || { return 0 2>/dev/null || exit 0; }
+
+      (
+      CFG="${AGENT_VM_CFG:-/etc/sing-box/config.json}"
+      SRC="${AGENT_HOST_CFG:-/opt/agentcfg/config.json}"
+      SEV=0 LEAK=0 PROB='' NOTE=''
+      prob() { [ -z "$PROB" ] && PROB="$1" || PROB="$PROB / $1"; }
+      note() { [ -z "$NOTE" ] && NOTE="$1" || NOTE="$NOTE / $1"; }
+
+      . /etc/os-release 2>/dev/null
+      UP="$(ps -o etimes= -p 1 2>/dev/null | tr -d ' ')"
+      if [ -z "$UP" ]; then UP=?
+      elif [ "$UP" -lt 3600 ]; then UP="$((UP / 60)) 分钟"
+      elif [ "$UP" -lt 86400 ]; then UP="$((UP / 3600)) 小时"
+      else UP="$((UP / 86400)) 天"; fi
+      IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+
+      printf '\n\033[2m%s · %s %s · up %s · %s\033[0m\n' "$(hostname)" "${NAME:-Linux}" "${VERSION_ID:-}" "$UP" "${IP:-无 IP}"
+      printf '\033[2m──────────────────────────────────────────────────\033[0m\n'
+
+      systemctl is-active --quiet agent-proxy || { SEV=2; LEAK=1; prob "代理未运行"; }
+      case "$(ip route get 1.1.1.1 2>/dev/null)" in
+        *"dev singbox"*) ;;
+        *) SEV=2; LEAK=1; prob "TUN 没接管路由" ;;
+      esac
+
+      TR="$(curl -fsS --max-time 6 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null)"
+      if [ -z "$TR" ]; then
+        SEV=2; prob "出口不通"
+      else
+        EIP="$(printf '%s\n' "$TR" | sed -n 's/^ip=//p')"
+        LOC="$(printf '%s\n' "$TR" | sed -n 's/^loc=//p')"
+        COLO="$(printf '%s\n' "$TR" | sed -n 's/^colo=//p')"
+      fi
+
+      NODE="$(jq -r '.route.final // "?"' "$CFG" 2>/dev/null)"
+      MT="$(stat -c %Y "$CFG" 2>/dev/null)"
+      if [ -z "$MT" ]; then AGE='?'
+      else
+        A="$(( $(date +%s) - MT ))"
+        if [ "$A" -lt 3600 ]; then AGE="$((A / 60)) 分钟前"
+        elif [ "$A" -lt 86400 ]; then AGE="$((A / 3600)) 小时前"
+        else AGE="$((A / 86400)) 天前"; fi
+      fi
+      if [ ! -f "$SRC" ]; then
+        [ "$SEV" -eq 0 ] && SEV=1; note "宿主机挂载 $SRC 不在"
+      elif ! cmp -s "$CFG" "$SRC"; then
+        [ "$SEV" -eq 0 ] && SEV=1; note "宿主机配置已更新但 VM 未重载"
+      fi
+
+      CI="$(cloud-init status 2>/dev/null | sed -n 's/^status: //p')"
+      [ "$CI" = done ] || { [ "$SEV" -eq 0 ] && SEV=1; note "cloud-init=${CI:-未知}"; }
+
+      if [ "$SEV" -ge 2 ]; then
+        printf '\033[31m⚠ %s\033[0m\n' "$PROB"
+        if [ "$LEAK" = 1 ]; then
+          printf '  TUN 没兜住，现在出去就是宿主机真实 IP，别在这里跑 claude/codex\n'
+          printf '\033[2m  排查: systemctl status agent-proxy; ip route get 1.1.1.1\033[0m\n'
+        else
+          printf '  TUN 在，流量进隧道出不去：断网但不泄露真 IP\n'
+          printf '\033[2m  排查: sudo journalctl -u agent-proxy -n 50；不行就换节点\033[0m\n'
+        fi
+      else
+        printf '\033[32m正常\033[0m  出口 %s · %s · %s\n' "$EIP" "$LOC" "$COLO"
+        printf '      节点 %s · 配置 %s\n' "$NODE" "$AGE"
+        printf '      环境 tz %s · %s\n' "$(date '+%Z %H:%M')" "${LANG:-locale 未设置}"
+        [ -n "$NOTE" ] && printf '\033[33m      注意 %s\033[0m\n' "$NOTE"
+        if [ -n "$LOC" ] && [ "$LOC" != US ]; then
+          printf '\033[33m      出口不是 US，但时区写死 America/Los_Angeles，环境不自洽\033[0m\n'
+        fi
+        printf '\033[2m提醒  别在 Mac 上登同一个 Claude 账号；换节点改 %s 后 cp 到 %s 再 restart agent-proxy\033[0m\n' "$SRC" "$CFG"
+      fi
+      printf '\033[2m──────────────────────────────────────────────────\033[0m\n'
+      )
+
+# ---------- 初始化(单脚本 set -e：任一步失败即中止，绝不在无可靠代理时落装 CLI) ----------
+runcmd:
+  - |
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    APT_CONF='-o Dpkg::Options::=--force-confold'   # 避免任何 dpkg conffile 交互提示
+
+    echo "==> 安装 sing-box(官方 deb 源，不走 GitHub) + TUN 依赖"
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+    chmod a+r /etc/apt/keyrings/sagernet.asc
+    printf '%s\n' \
+      'Types: deb' \
+      'URIs: https://deb.sagernet.org/' \
+      'Suites: *' \
+      'Components: *' \
+      'Enabled: yes' \
+      'Signed-By: /etc/apt/keyrings/sagernet.asc' \
+      > /etc/apt/sources.list.d/sagernet.sources
+    apt-get update
+    apt-get install -y $APT_CONF sing-box
+
+    echo "==> 确保 TUN 设备可用(OrbStack 机器通常已有 /dev/net/tun)"
+    if [ ! -e /dev/net/tun ]; then
+      mkdir -p /dev/net
+      mknod /dev/net/tun c 10 200 && chmod 0666 /dev/net/tun
+    fi
+    if [ ! -e /dev/net/tun ]; then
+      echo "ERROR: /dev/net/tun 不可用，无法启用 TUN(请确认 OrbStack 机器支持)。" >&2
+      exit 1
+    fi
+
+    echo "==> 把节点配置写进 VM(/etc/sing-box/config.json，来自宿主机 --mount；覆盖 deb 默认 conffile)"
+    CFG=/opt/agentcfg/config.json
+    for _ in $(seq 1 15); do [ -f "$CFG" ] && break; sleep 1; done
+    if [ ! -f "$CFG" ]; then
+      echo "ERROR: 未找到 $CFG。先用 node2singbox.py 生成 ~/.config/orbstack-agent/config.json 并用 --mount 创建。" >&2
+      exit 1
+    fi
+    cp "$CFG" /etc/sing-box/config.json
+
+    if grep -Eq '__ENTRY_ADDR__|__UUID__|__SNI__|__WS_PATH__|__WS_HOST__' /etc/sing-box/config.json; then
+      echo "ERROR: 节点配置仍含占位符，请用 node2singbox.py 生成或填真实值。" >&2
+      exit 1
+    fi
+    /usr/bin/sing-box check -c /etc/sing-box/config.json
+
+    echo "==> 启动 sing-box(TUN 透明代理 + mixed)并等待就绪"
+    systemctl daemon-reload
+    systemctl enable agent-proxy
+    if ! systemctl start agent-proxy; then
+      journalctl -u agent-proxy -n 80 --no-pager || true
+      echo "ERROR: agent-proxy 启动失败，见上方日志。" >&2
+      exit 1
+    fi
+    READY=0
+    for _ in $(seq 1 30); do
+      if ip -o link show 2>/dev/null | grep -qw singbox && ss -ltn 2>/dev/null | grep -q ':7890 '; then READY=1; break; fi
+      sleep 1
+    done
+    if [ "$READY" != 1 ]; then
+      journalctl -u agent-proxy -n 80 --no-pager || true
+      echo "ERROR: singbox TUN 或 127.0.0.1:7890 未就绪。" >&2
+      exit 1
+    fi
+
+    echo "==> 校验 TUN 真的接管了默认路由(不靠任何代理变量)"
+    ROUTE="$(ip route get 1.1.1.1 2>&1 || true)"
+    printf '%s\n' "$ROUTE"
+    if ! printf '%s\n' "$ROUTE" | grep -q 'dev singbox'; then
+      echo "ERROR: 1.1.1.1 不走 singbox，TUN 没接管路由，这样出去就是宿主机真实 IP。" >&2
+      exit 1
+    fi
+
+    echo "==> 校验出海：不带 proxy 环境变量，纯靠 TUN；拿不到外网 IP 即视为失败"
+    TRACE="$(curl -fsS --max-time 20 https://www.cloudflare.com/cdn-cgi/trace || true)"
+    if ! printf '%s\n' "$TRACE" | grep -q '^ip='; then
+      echo "ERROR: 无法连通外网(节点不可用或被墙?)。" >&2
+      exit 1
+    fi
+    printf '%s\n' "$TRACE" | grep -E '^(ip|loc|warp|colo)='
+    LOC="$(printf '%s\n' "$TRACE" | sed -n 's/^loc=//p')"
+    if [ -n "$LOC" ] && [ "$LOC" != "US" ]; then
+      echo "WARN: 出口 loc=$LOC 不是 US，但 timezone 固定 America/Los_Angeles，环境不自洽，自己决定改哪个。" >&2
+    fi
+
+    echo "==> 校验 mixed 入站 127.0.0.1:7890(调试通道)"
+    if ! curl -fsS --max-time 20 --proxy http://127.0.0.1:7890 \
+         https://www.cloudflare.com/cdn-cgi/trace | grep -q '^ip='; then
+      echo "ERROR: mixed 入站 7890 不通。" >&2
+      exit 1
+    fi
+
+    echo "==> 安装 Node 22 + Claude Code + Codex(同样只靠 TUN，说明整套出站都在代理里)"
+    curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
+    bash /tmp/nodesource_setup.sh
+    apt-get install -y $APT_CONF nodejs
+    npm install -g @anthropic-ai/claude-code @openai/codex
+
+    echo "✅ 完成。首次使用先认证："
+    echo "   orbctl ssh agent"
+    echo "   claude   # Anthropic 登录"
