@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Claude Code hook: keep replies in the user's language.
 
-UserPromptSubmit: detect the language of the prompt and remember it per
-session; remind Claude only when it differs from the last remembered one
-(the prompt itself and CLAUDE.md cover the normal case).
+UserPromptSubmit: the first prompt whose language is recognisable fixes the
+session's language; nothing is injected (the prompt and CLAUDE.md suffice).
 SessionStart (source=compact): compaction drops the user's own messages, so
 re-inject the remembered language; fall back to the transcript if needed.
 Python 3.9 compatible (macOS system python3).
@@ -102,17 +101,14 @@ def main():
         prompt = data.get("prompt") or ""
         if prompt.lstrip().startswith("<"):  # turns Claude Code starts itself
             return
+        if read_state(session):
+            return
         code = detect(prompt)
         if not code:
-            return
-        previous = read_state(session)
-        if code == previous:
             return
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(state_path(session), "w") as f:
             f.write(code)
-        if previous:  # the user switched language mid-session
-            emit(event, code)
     elif event == "SessionStart" and data.get("source") == "compact":
         code = read_state(session) or from_transcript(data.get("transcript_path") or "")
         if code:
