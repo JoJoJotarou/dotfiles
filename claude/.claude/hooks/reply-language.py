@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Claude Code hook: keep replies in the user's language.
 
-UserPromptSubmit: detect the language of the prompt, remember it per session,
-and remind Claude to answer in it.
+UserPromptSubmit: detect the language of the prompt and remember it per
+session; remind Claude only when it differs from the last remembered one
+(the prompt itself and CLAUDE.md cover the normal case).
 SessionStart (source=compact): compaction drops the user's own messages, so
 re-inject the remembered language; fall back to the transcript if needed.
 Python 3.9 compatible (macOS system python3).
@@ -40,6 +41,14 @@ def name(code):
 
 def state_path(session_id):
     return os.path.join(STATE_DIR, re.sub(r"[^A-Za-z0-9_-]", "_", session_id))
+
+
+def read_state(session_id):
+    try:
+        with open(state_path(session_id)) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
 
 
 def from_transcript(path):
@@ -96,19 +105,16 @@ def main():
         code = detect(prompt)
         if not code:
             return
+        previous = read_state(session)
+        if code == previous:
+            return
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(state_path(session), "w") as f:
             f.write(code)
-        if code != "en":
+        if previous:  # the user switched language mid-session
             emit(event, code)
     elif event == "SessionStart" and data.get("source") == "compact":
-        code = None
-        try:
-            with open(state_path(session)) as f:
-                code = f.read().strip() or None
-        except OSError:
-            pass
-        code = code or from_transcript(data.get("transcript_path") or "")
+        code = read_state(session) or from_transcript(data.get("transcript_path") or "")
         if code:
             emit(event, code)
 
