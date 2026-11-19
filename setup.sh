@@ -11,6 +11,7 @@ NC='\033[0m' # 无颜色
 
 # 📦 模块列表（根据你的 dotfiles 项目结构）
 MODULES=(
+    "claude"
     "git"
     "ghostty"
     "gradle"
@@ -161,6 +162,30 @@ install_launch_agents() {
     done
 }
 
+# 🤖 Claude Code hooks：脚本由 stow 软链到 ~/.claude/hooks；settings.json 归 Claude 自己写，
+# 不软链，这里只把 hook 条目合并进去（先删同名旧条目再追加，可重复执行）
+merge_claude_hooks() {
+    local settings="$HOME/.claude/settings.json"
+    command -v jq >/dev/null || { echo -e "${YELLOW}未找到 jq，跳过 Claude hooks 合并${NC}"; return 0; }
+    [ -f "$settings" ] || echo '{}' > "$settings"
+    local cmd='"$HOME"/.claude/hooks/reply-language.py'
+    local merged
+    merged="$(jq --arg cmd "$cmd" '
+        def add($event; $matcher):
+            .hooks[$event] = ((.hooks[$event] // [])
+                | map(select(([.hooks[]?.command] | any(test("reply-language"))) | not)))
+                + [ ({hooks: [{type: "command", command: $cmd}]} + (if $matcher then {matcher: $matcher} else {} end)) ];
+        add("UserPromptSubmit"; null) | add("SessionStart"; "compact")
+    ' "$settings")" || return 1
+    if $DRY_RUN; then
+        echo -e "${YELLOW}  [Dry-run] 合并 reply-language hook 到 $settings${NC}"
+    elif ! printf '%s\n' "$merged" | cmp -s - "$settings"; then
+        cp "$settings" "$settings.bak-$TIMESTAMP"
+        printf '%s\n' "$merged" > "$settings"
+        echo -e "${GREEN}已合并 Claude hooks（原文件备份为 settings.json.bak-$TIMESTAMP）${NC}"
+    fi
+}
+
 # 🚀 安装 dotfiles
 install_dotfiles() {
     echo -e "${BLUE}开始安装 dotfiles...${NC}"
@@ -188,6 +213,8 @@ install_dotfiles() {
             fi
         fi
     done
+
+    merge_claude_hooks
 
     echo -e "${GREEN}✅ 安装完成${NC}"
     echo -e "${YELLOW}备份文件保存在: $BAK_TIMESTAMP_DIR${NC}"
