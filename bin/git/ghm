@@ -341,7 +341,7 @@ resolve_git_userid_auto() {
 rewrite_github_ssh_urls_in_args() {
     local userid="$1"
     shift
-    local host_alias="${userid}.github.com"
+    local host_alias="$(printf %s "$userid" | tr "[:upper:]" "[:lower:]").github.com"  # ssh 会把主机名转小写再匹配 Host，所以别名必须小写
     local arg rewritten
     local -a out=()
 
@@ -835,7 +835,7 @@ add_account() {
     fi
 
     local keyfile="$SSH_DIR/id_ed25519_$userid"
-    local host_alias="${userid}.github.com"
+    local host_alias="$(printf %s "$userid" | tr "[:upper:]" "[:lower:]").github.com"  # ssh 会把主机名转小写再匹配 Host，所以别名必须小写
     local gitconfig_file="$HOME/.gitconfig"
     local include_pattern
     include_pattern=$(gitconfig_include_pattern_for_userid "$userid")
@@ -1017,7 +1017,7 @@ delete_account() {
     userid="$existing_userid"
 
     local keyfile="$SSH_DIR/id_ed25519_$userid"
-    local host_alias="${userid}.github.com"
+    local host_alias="$(printf %s "$userid" | tr "[:upper:]" "[:lower:]").github.com"  # ssh 会把主机名转小写再匹配 Host，所以别名必须小写
     local account_dir="$GITHUB_BASE_DIR/$userid"
     local gitconfig_file="$HOME/.gitconfig"
     local include_pattern
@@ -1087,7 +1087,7 @@ list_accounts() {
         [[ -n "$userid" ]] || continue
         local keyfile
         keyfile=$(find_keyfile_by_userid "$userid")
-        local host_alias="${userid}.github.com"
+        local host_alias="$(printf %s "$userid" | tr "[:upper:]" "[:lower:]").github.com"  # ssh 会把主机名转小写再匹配 Host，所以别名必须小写
         local has_host="否"
         if ssh_config_has_host "$host_alias"; then
             has_host="是"
@@ -1125,7 +1125,7 @@ git_wrapper() {
     if [[ -n "$userid" ]]; then
         local keyfile host_alias
         if keyfile=$(find_keyfile_by_userid "$userid"); then
-            host_alias="${userid}.github.com"
+            host_alias="$(printf %s "$userid" | tr "[:upper:]" "[:lower:]").github.com"  # ssh 会把主机名转小写再匹配 Host，所以别名必须小写
             export GIT_SSH_COMMAND="ssh -o Hostname=ssh.github.com -o Port=443 -i ${keyfile} -o IdentitiesOnly=yes"
         fi
 
