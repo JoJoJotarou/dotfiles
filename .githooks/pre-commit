@@ -1,0 +1,19 @@
+#!/bin/sh
+# dotfiles 提交护栏：拦截大文件、绝对 home 路径、本机密钥。
+fail=0
+max=1048576
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+    size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$max" ]; then
+        echo "✗ 文件超过 1 MB：$f（$size 字节）"; fail=1
+    fi
+    case "$f" in
+        *secrets.zsh) echo "✗ 不能提交密钥文件：$f"; fail=1 ;;
+    esac
+done
+if git diff --cached -U0 --diff-filter=ACM | grep -E '^\+' | grep -v '^+++' | grep -qE '/Users/[A-Za-z0-9_]'; then
+    echo "✗ 新增内容里有绝对 home 路径（/Users/...），请改成 ~ 或 \$HOME："
+    git diff --cached -U0 --diff-filter=ACM | grep -nE '^\+.*/Users/[A-Za-z0-9_]' | grep -v '^[0-9]*:+++' | head -10
+    fail=1
+fi
+[ "$fail" -eq 0 ] || { echo "提交已拦下。确实需要时可用 git commit --no-verify 跳过。"; exit 1; }
