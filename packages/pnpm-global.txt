@@ -1,0 +1,18 @@
+# pnpm 全局 CLI，每行一个包名。恢复：xargs pnpm add -g < packages/pnpm-global.txt
+@augmentcode/auggie
+@openai/codex
+@opencode-ai/cli
+@tiny-fish/cli
+ace-tool
+backlog.md
+cowsay
+ctx7
+happy
+opencode-studio-server
+pm2
+pnpm
+pyright
+tsx
+typescript
+typescript-language-server
+wrangler

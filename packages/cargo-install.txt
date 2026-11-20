@@ -1,0 +1,3 @@
+# cargo install 的 crate 名（不含 rustup 工具链代理）。恢复：xargs -n1 cargo install < packages/cargo-install.txt
+arazzo-cli
+tauri-driver

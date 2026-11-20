@@ -1,0 +1,2 @@
+# uv tool 安装的 Python CLI。恢复：xargs -n1 uv tool install < packages/uv-tools.txt
+claude-workflow
