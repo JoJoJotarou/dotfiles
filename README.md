@@ -29,3 +29,7 @@ my dotfiles
 - 第三方安装器硬编码往 `~/.zshrc` / `~/.zprofile` 追加，这两个文件会被 `$ZDOTDIR/.zshrc` 和 `$ZDOTDIR/.zprofile` 末尾显式 source；这些安装器加的块留在 `~` 下，不搬进仓库；仓库里只放自己写的配置。
 - Claude Code：`claude/.claude/hooks/` 里的脚本由 stow 软链到 `~/.claude/hooks/`；`~/.claude/settings.json` 由 Claude 自己读写，不进仓库，`setup.sh` 只用 `jq` 把 hook 条目合并进去。
   - `reply-language.py`：会话第一条能识别语言的消息定下用户语言，平时不注入任何内容，只在上下文压缩后（`SessionStart` 的 `compact`）提醒按该语言回复（含过程中的进度说明），因为压缩会丢掉用户原话，模型容易跟着英文摘要改说英文。
+
+## 开发工具清单
+
+本机装了哪些开发工具，记在 `packages/` 里（Homebrew、pnpm 全局、uv、cargo、go）。一条原则：一个工具只走一个渠道。体检脚本 `bin/doctor.sh` 只报告、不删除：对照清单找出越界的全局工具、失效软链，以及 `$HOME` 下新冒出来的隐藏目录。详情见 `packages/README.md`。
